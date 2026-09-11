@@ -7,7 +7,7 @@
 
 import { isIP } from 'node:net'
 import { canonicalizeHost, stripBrackets } from './parent-proxy.js'
-import { isLoopbackDestination } from './address.js'
+import { isLoopbackAddress, isLoopbackDestination } from './address.js'
 
 /** Drop an IPv6 zone id from an IP-literal entry; matching ignores zones. */
 function dropZone(host: string): string {
@@ -125,13 +125,18 @@ export function matchesDomainPattern(
       return true
     }
   }
-  // Loopback destinations are one destination however they are spelled:
-  // `localhost`, `127.0.0.1`, `127.0.0.2`, `::1`. A client builds whichever
-  // spelling its URL used, so an entry naming one must admit the others —
-  // otherwise `allowedDomains: ["localhost"]` silently fails to cover the
-  // `http://127.0.0.1:11434` a tool actually dials (or vice versa), and an
-  // allowlist entry that means "the host's loopback" reads as a no-op.
-  return isLoopbackDestination(h) && isLoopbackDestination(p)
+  // A loopback *literal* and any other loopback destination name the same
+  // server, whichever way a client spells it: `allowedDomains: ["localhost"]`
+  // must admit the `http://127.0.0.1:11434` a tool actually dials, and a
+  // `127.0.0.1:3000` entry must admit `localhost:3000`. At least one side must
+  // be a literal, so two *names* stay distinct — `host-b.localhost` is not
+  // `localhost`, and a policy (or a credential's `injectHosts`) that scopes
+  // something to `localhost` must not silently cover every `*.localhost`.
+  return (
+    isLoopbackDestination(h) &&
+    isLoopbackDestination(p) &&
+    (isLoopbackAddress(h) || isLoopbackAddress(p))
+  )
 }
 
 /**

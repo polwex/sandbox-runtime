@@ -250,9 +250,6 @@ describe('matchesDomainPatternWithPort — loopback destinations', () => {
       true,
     )
     expect(matchesDomainPatternWithPort('::1', 11434, 'localhost')).toBe(true)
-    expect(matchesDomainPatternWithPort('localhost', 3000, '*.localhost')).toBe(
-      true,
-    )
   })
 
   test('a loopback literal entry admits every other loopback spelling', () => {
@@ -263,6 +260,25 @@ describe('matchesDomainPatternWithPort — loopback destinations', () => {
     expect(matchesDomainPatternWithPort('127.0.0.1', 443, '[::1]:443')).toBe(
       true,
     )
+  })
+
+  test('two loopback names stay distinct unless one is a literal', () => {
+    // A credential scoped to `localhost` must not reach every `*.localhost`,
+    // and `*.localhost` keeps wildcard semantics (strict subdomains), so the
+    // bare name does not match it either.
+    expect(
+      matchesDomainPatternWithPort('host-b.localhost', 80, 'localhost'),
+    ).toBe(false)
+    expect(matchesDomainPatternWithPort('localhost', 3000, '*.localhost')).toBe(
+      false,
+    )
+    expect(
+      matchesDomainPatternWithPort('a.localhost', 3000, '*.localhost'),
+    ).toBe(true)
+    // The literal forms still bridge the two.
+    expect(
+      matchesDomainPatternWithPort('host-b.localhost', 80, '127.0.0.1'),
+    ).toBe(true)
   })
 
   test('the entry port still governs', () => {
