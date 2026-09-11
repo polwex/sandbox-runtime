@@ -8,3 +8,14 @@ vendor/srt-win/x64/
 vendor/srt-win/arm64/
 vendor/srt-win/target/
 vendor/java-proxy-agent/srt-proxy-agent.jar
+
+# Devenv
+.devenv*
+devenv.local.nix
+devenv.local.yaml
+
+# direnv
+.direnv
+
+# pre-commit
+.pre-commit-config.yaml

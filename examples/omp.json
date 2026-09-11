@@ -1,0 +1,28 @@
+{
+  "network": {
+    "allowedDomains": [
+      "localhost",
+      "*.deepseek.com",
+      "*.openrouter.ai",
+      "github.com",
+      "*.github.com",
+      "*.ojos-eagle.ts.net"
+    ],
+    "deniedDomains": [],
+    "allowUnixSockets": [],
+    "allowLocalBinding": true
+  },
+  "filesystem": {
+    "denyRead": ["/srv", "/home"],
+    "allowRead": [".", "~/.gitconfig", "~/.nix-profile/bin"],
+    "allowWrite": [".", "~/.omp", "/tmp"],
+    "denyWrite": []
+  },
+  "ignoreViolations": {
+    "*": [],
+    "git push": [],
+    "npm": []
+  },
+  "enableWeakerNestedSandbox": false,
+  "enableWeakerNetworkIsolation": false
+}
