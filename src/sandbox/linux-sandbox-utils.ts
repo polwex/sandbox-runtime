@@ -426,6 +426,46 @@ async function linuxGetMandatoryDenyPaths(
 // be cleaned up explicitly.
 const bwrapMountPoints: Set<string> = new Set()
 
+/**
+ * Create the mount point for a `--ro-bind` over a path that does not exist,
+ * as the invoking user, before bwrap runs.
+ *
+ * bwrap would create a missing mount point itself, but from inside its own
+ * user namespace: where the mapped uid has no host mapping the artifact lands
+ * owned by the overflow uid (`nobody`), and in a sticky directory such as
+ * /tmp the real user can then never remove it. One leaked artifact — a
+ * SIGKILLed run — is enough to break every later sandbox in that directory
+ * with "Can't create file at <path>: Permission denied" (observed on
+ * /tmp/.git/hooks). Creating it here keeps ownership with the real user, so
+ * cleanup can always remove it and the artifact can never wedge a directory.
+ *
+ * Only the deny path itself is pre-created. An intermediate component is left
+ * to bwrap: mounting an empty directory over it hides whatever a pre-created
+ * nested mount point put there, and bwrap would then have to create that
+ * nested point inside the read-only mount ("Read-only file system"). bwrap
+ * handles all of its mount points in a pass of its own, in the right order.
+ *
+ * A creation failure is logged rather than skipped: the bind is still
+ * emitted, so bwrap fails closed exactly as before — the log only replaces a
+ * cryptic bwrap error with the cause. `ENOENT` is not a failure: the parent
+ * directory does not exist yet and bwrap will create the whole chain.
+ */
+function createMountPoint(mountPoint: string): void {
+  try {
+    fs.writeFileSync(mountPoint, '', { flag: 'wx', mode: 0o444 })
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException
+    if (err.code === 'EEXIST' || err.code === 'ENOENT') return
+    logForDebugging(
+      `[Sandbox Linux] Could not create mount point ${mountPoint}: ${err.message}. ` +
+        'An artifact left by a crashed sandbox and owned by another user ' +
+        '(likely under a sticky directory such as /tmp) blocks its creation; ' +
+        'remove that artifact to have this deny rule enforced.',
+      { level: 'warn' },
+    )
+  }
+}
+
 const CAP_SETFCAP = 31
 
 /** Whether this process holds `cap` in its effective set (Linux). */
@@ -487,6 +527,22 @@ function registerExitCleanupHandler(): void {
   process.on('exit', () => {
     cleanupBwrapMountPoints({ force: true })
   })
+
+  // A parent terminated by a signal never reaches 'exit': Node runs no
+  // 'exit' handler for a default-terminated SIGTERM/SIGINT, and a harness
+  // that tears a session down with SIGTERM would leave every mount point
+  // behind (or, after its SIGKILL escalation, permanently). Clean up on the
+  // signal itself, then re-raise it with our own listener removed, so the
+  // default disposition — and any other listener, such as the CLI forwarding
+  // the signal to the sandboxed child — still decides how the process ends.
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+    const onSignal = (): void => {
+      cleanupBwrapMountPoints({ force: true })
+      process.removeListener(signal, onSignal)
+      process.kill(process.pid, signal)
+    }
+    process.on(signal, onSignal)
+  }
 
   exitHandlerRegistered = true
 }
@@ -1514,6 +1570,7 @@ async function generateFilesystemArgs(
               `[Sandbox Linux] Mounted empty dir at ${firstNonExistent} to block creation of ${normalizedPath}`,
             )
           } else {
+            createMountPoint(firstNonExistent)
             denyWriteArgs.push('--ro-bind', '/dev/null', firstNonExistent)
             denyWriteRawDests.set(firstNonExistent, rawPath)
             bwrapMountPoints.add(firstNonExistent)

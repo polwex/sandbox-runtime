@@ -701,7 +701,12 @@ $ srt 'echo "bad" > .git/hooks/pre-commit'
 /bin/bash: .git/hooks/pre-commit: Operation not permitted
 ```
 
-**Note (Linux):** On Linux, mandatory deny paths only block files that already exist. Non-existent files in these patterns cannot be blocked by bubblewrap's bind-mount approach. macOS uses glob patterns which block both existing and new files.
+**Note (Linux):** A path in these patterns is blocked whether or not it exists. bubblewrap cannot bind over a missing path, so an empty **mount point** is created for it and `/dev/null` is bound over that — a write to a not-yet-existent `.bashrc` fails with `Permission denied` instead of creating it. Two consequences worth knowing:
+
+- Those mount points are real, empty files in your working tree (and empty directories for the `.claude/commands` form) for as long as the sandboxed command runs, so `git status` and file listings show them — `.bashrc`, `.gitconfig`, `.mcp.json`, `.vscode/`, `.idea/`, `.claude/` … — until the command finishes. The runner creates them itself, so they never linger past a clean run.
+- They cannot be removed early: the deny rule lives on the mount, so deleting one would re-open the path. `SIGTERM`, `SIGINT` and `SIGHUP` clean up immediately, and a normal exit cleans up at exit; only a `SIGKILL`ed runner can leave them behind. A leftover is an empty file owned by the invoking user (or, from an older run, by `nobody`, which a sticky `/tmp` will not let you delete); remove it by hand if you find one, since it blocks the deny rule from being re-established in that directory.
+
+macOS uses glob patterns and needs none of this: it blocks both existing and new files with no artifacts.
 
 **Linux search depth:** On Linux, the sandbox uses `ripgrep` to scan for dangerous files in subdirectories within allowed write paths. By default, it searches up to 3 levels deep for performance. You can configure this with `mandatoryDenySearchDepth`:
 
