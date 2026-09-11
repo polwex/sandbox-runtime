@@ -112,6 +112,7 @@ import {
 import { EOL } from 'node:os'
 import { dirname } from 'node:path'
 import { getJavaProxyAgentJarPath } from './java-proxy-agent.js'
+import { getLoopbackShimScriptPath } from './loopback-shim.js'
 
 interface HostNetworkManagerContext {
   httpProxyPort: number
@@ -142,6 +143,13 @@ let mitmCA: MitmCA | undefined
  * shipped/found (JVMs then just aren't proxy-aware, as before).
  */
 let javaAgentJarPath: string | undefined
+/**
+ * Resolved path of the Linux loopback shim script (see loopback-shim.ts); set
+ * while a proxy is advertised, undefined if the script is not shipped/found.
+ * Used only when the allowlist names a loopback destination, where it keeps a
+ * server bound inside the sandbox reachable through the proxy listener.
+ */
+let loopbackShimScriptPath: string | undefined
 // Per-session proxy auth token. Generated at proxy start, exported only into
 // the sandbox child env, checked on every CONNECT/request — so a host process
 // dialing 127.0.0.1:<proxyPort> can't reach the filter callback.
@@ -929,6 +937,9 @@ async function initialize(
       // both. Resolved once here, advertised via JAVA_TOOL_OPTIONS per command.
       javaAgentJarPath =
         getJavaProxyAgentJarPath(config.javaAgentJarPath) ?? undefined
+      // The loopback shim's script is run by socat inside the sandbox, so it
+      // has to be readable there — same resolution shape as the jar above.
+      loopbackShimScriptPath = getLoopbackShimScriptPath() ?? undefined
       // Leaves are minted lazily per-CONNECT (after this point), so setting
       // the CDP URL now means every leaf carries it. See MitmCA.crlUrl.
       // Windows-only: on Linux the child runs under bwrap --unshare-net and
@@ -1579,6 +1590,20 @@ async function wrapWithSandbox(
     customConfig?.network?.allowedDomains ?? config?.network?.allowedDomains,
   )
 
+  // A loopback destination on the allowlist means "a service on loopback",
+  // and under bwrap --unshare-net the child's loopback is its own namespace —
+  // so on Linux that destination can only be the host's, reachable only
+  // through the proxy (see the NO_PROXY note in generateProxyEnvVars). The
+  // shim at the in-sandbox listener is what keeps a server the sandboxed
+  // process itself bound reachable at the same time.
+  const routeLoopbackViaProxy =
+    platform === 'linux' &&
+    allowlistsLoopback(
+      customConfig?.network?.allowedDomains ??
+        config?.network?.allowedDomains ??
+        [],
+    )
+
   // Get configs - use custom if provided, otherwise fall back to main config
   // If neither exists, defaults to empty arrays (most restrictive)
   // Always include default system write paths (like /dev/null, /tmp/claude)
@@ -1651,6 +1676,11 @@ async function wrapWithSandbox(
     if (javaAgentJarPath) {
       expandedAllowRead.push(javaAgentJarPath)
     }
+    // And the loopback shim socat runs at the in-sandbox listener, when the
+    // policy is one that uses it.
+    if (routeLoopbackViaProxy && loopbackShimScriptPath) {
+      expandedAllowRead.push(loopbackShimScriptPath)
+    }
     readConfig = {
       denyOnly: expandedDenyRead,
       allowWithinDeny: expandedAllowRead,
@@ -1717,22 +1747,15 @@ async function wrapWithSandbox(
         binShell,
       })
 
-    case 'linux': {
-      // The child's loopback is its own network namespace (`--unshare-net`),
-      // so a direct connect to 127.0.0.1 can only ever reach what the sandbox
-      // itself bound. When the policy names a loopback destination, that
-      // destination is the host's loopback and only the proxy can reach it —
-      // drop it from the child's NO_PROXY (see generateProxyEnvVars).
-      const routeLoopbackViaProxy = allowlistsLoopback(
-        customConfig?.network?.allowedDomains ??
-          config?.network?.allowedDomains ??
-          [],
-      )
+    case 'linux':
       return wrapCommandWithSandboxLinux({
         command,
         commandId,
         needsNetworkRestriction,
         routeLoopbackViaProxy,
+        loopbackShimScriptPath: routeLoopbackViaProxy
+          ? loopbackShimScriptPath
+          : undefined,
         // Only pass socket paths if proxy is running (when there are domains to filter)
         httpSocketPath: needsNetworkProxy
           ? getLinuxHttpSocketPath()
@@ -1768,7 +1791,6 @@ async function wrapWithSandbox(
         observeSocketPath: linuxMonitor?.observeSocketPath,
         abortSignal,
       })
-    }
 
     case 'windows':
       // Windows wraps to an argv array, not a shell string. Forcing
@@ -2257,6 +2279,7 @@ async function reset(): Promise<void> {
   resolvedAddressGuard = createResolvedAddressGuard()
   mitmCA = undefined
   javaAgentJarPath = undefined
+  loopbackShimScriptPath = undefined
   sentinelRegistry.clear()
   awsPairRegistry.clear()
   maskedFileStore.dispose()

@@ -55,6 +55,7 @@
     "vendor/seccomp",
     "vendor/srt-win",
     "vendor/java-proxy-agent",
+    "vendor/loopback-shim",
     "README.md",
     "LICENSE"
   ],

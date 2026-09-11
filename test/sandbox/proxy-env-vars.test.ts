@@ -196,6 +196,89 @@ describe('generateProxyEnvVars', () => {
     )
 
     it.if(isLinux)(
+      'sandboxed curl reaches a server running inside the sandbox itself',
+      async () => {
+        // The other half of the same workflow, and the reason the listener is
+        // a shim rather than a plain bridge: when the sandboxed process is
+        // the one that bound the port, only the sandbox's own loopback can
+        // answer. Both halves have to work under one allowlist, since a
+        // client cannot know which side the server is on.
+        const SANDBOX_PORT = 39471
+        const server =
+          `require("net").createServer(s=>s.end(` +
+          `"HTTP/1.1 200 OK\\r\\nContent-Length: 12\\r\\n\\r\\nSANDBOX-LOCL"))` +
+          `.listen(${SANDBOX_PORT},"127.0.0.1")`
+        try {
+          await SandboxManager.initialize({
+            network: { allowedDomains: ['localhost'], deniedDomains: [] },
+            filesystem: { denyRead: [], allowWrite: [], denyWrite: [] },
+          })
+
+          const wrapped = await SandboxManager.wrapWithSandbox(
+            `${JSON.stringify(process.execPath)} -e '${server}' >/dev/null 2>&1 & ` +
+              'sleep 1; ' +
+              `curl -s --max-time 5 http://localhost:${SANDBOX_PORT}/; ` +
+              'kill %1 2>/dev/null',
+          )
+          const result = await spawnAsync(wrapped, {
+            shell: true,
+            encoding: 'utf8',
+            timeout: 20000,
+          })
+
+          expect(result.stdout).toContain('SANDBOX-LOCL')
+        } finally {
+          await SandboxManager.reset()
+        }
+      },
+    )
+
+    it.if(isLinux)(
+      'the shim script stays readable when the policy denies the tree it lives in',
+      async () => {
+        // The real configuration shape: a policy that denies /home while
+        // srt itself is installed under it. socat has to *read* the shim
+        // script inside the sandbox, so wrapWithSandbox carves it out of the
+        // deny — without that the listener would fail to start and every
+        // proxied request would break, not just loopback ones.
+        const SANDBOX_PORT = 39472
+        const server =
+          `require("net").createServer(s=>s.end(` +
+          `"HTTP/1.1 200 OK\\r\\nContent-Length: 9\\r\\n\\r\\nCARVED-OK"))` +
+          `.listen(${SANDBOX_PORT},"127.0.0.1")`
+        try {
+          await SandboxManager.initialize({
+            network: { allowedDomains: ['localhost'], deniedDomains: [] },
+            filesystem: {
+              denyRead: ['/home'],
+              // Enough of the host tree to run a command at all: the shell
+              // and the runtime the test server needs.
+              allowRead: ['.', '~/.nix-profile/bin'],
+              allowWrite: [],
+              denyWrite: [],
+            },
+          })
+
+          const wrapped = await SandboxManager.wrapWithSandbox(
+            `${JSON.stringify(process.execPath)} -e '${server}' >/dev/null 2>&1 & ` +
+              'sleep 1; ' +
+              `curl -s --max-time 5 http://localhost:${SANDBOX_PORT}/; ` +
+              'kill %1 2>/dev/null',
+          )
+          const result = await spawnAsync(wrapped, {
+            shell: true,
+            encoding: 'utf8',
+            timeout: 20000,
+          })
+
+          expect(result.stdout).toContain('CARVED-OK')
+        } finally {
+          await SandboxManager.reset()
+        }
+      },
+    )
+
+    it.if(isLinux)(
       'sandboxed curl to loopback still fails when the policy does not allow it',
       async () => {
         // The fix must not turn loopback into an implicit allow: an empty

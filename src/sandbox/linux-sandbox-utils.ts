@@ -26,6 +26,7 @@ import type {
   FsWriteRestrictionConfig,
 } from './sandbox-schemas.js'
 import { getApplySeccompBinaryPath } from './generate-seccomp-filter.js'
+import { buildLoopbackShimListener } from './loopback-shim.js'
 import type { SeccompConfig } from './sandbox-config.js'
 
 export interface LinuxNetworkBridgeContext {
@@ -98,6 +99,14 @@ export interface LinuxSandboxParams {
   bwrapPath?: string
   /** Absolute path to the socat binary (default: resolve "socat" via PATH) */
   socatPath?: string
+  /**
+   * Absolute path to the loopback shim script (vendor/loopback-shim/shim.sh).
+   * Only used with {@link routeLoopbackViaProxy}: it makes the in-sandbox HTTP
+   * listener try the sandbox's own loopback before the host proxy, so a dev
+   * server started inside the sandbox stays reachable. The path must be
+   * readable from inside the sandbox (the caller adds it to the read allows).
+   */
+  loopbackShimScriptPath?: string
   /** Filesystem unix socket bound by the Linux violation monitor. When set,
    *  the socket is bind-mounted into the sandbox and apply-seccomp is told
    *  (via SRT_OBSERVE_SOCK) to install a USER_NOTIF observation filter and
@@ -109,6 +118,15 @@ export interface LinuxSandboxParams {
 
 /** Default max depth for searching dangerous files */
 const DEFAULT_MANDATORY_DENY_SEARCH_DEPTH = 3
+
+/**
+ * In-sandbox listener ports the proxy env vars point at (see
+ * generateProxyEnvVars in the network-restriction block below). The host's
+ * proxy is bridged to these over a Unix socket bind-mounted into the
+ * namespace; on Linux the child sees a fixed port, not the host's.
+ */
+const HTTP_PROXY_PORT = 3128
+const SOCKS_PROXY_PORT = 1080
 
 /**
  * Find if any component of the path is a symlink within the allowed write paths.
@@ -834,6 +852,12 @@ function resolveApplySeccompPrefix(
 /**
  * Build the command that runs inside the sandbox.
  * Sets up HTTP proxy on port 3128 and SOCKS proxy on port 1080
+ *
+ * When `loopbackShim` is supplied the HTTP listener is the loopback shim
+ * instead of a direct socat bridge: it still reaches the parent proxy for
+ * every other destination, but a loopback destination is dialled on the
+ * sandbox's own loopback first (a server the sandboxed process itself bound
+ * is unreachable from the host proxy — see vendor/loopback-shim/shim.sh).
  */
 function buildSandboxCommand(
   httpSocketPath: string,
@@ -842,15 +866,28 @@ function buildSandboxCommand(
   applySeccompPrefix: string | undefined,
   shell?: string,
   socatPath?: string,
+  loopbackShim?: {
+    scriptPath: string
+  },
 ): string {
   // Default to bash for backward compatibility
   const shellPath = shell || 'bash'
   // Host filesystem is bind-mounted into the sandbox, so an explicit
   // socatPath resolves to the same binary inside bwrap.
   const socat = quote([socatPath ?? 'socat'])
+  const httpListener = loopbackShim
+    ? buildLoopbackShimListener({
+        localPort: HTTP_PROXY_PORT,
+        parentSocketPath: httpSocketPath,
+        scriptPath: loopbackShim.scriptPath,
+        shell: shellPath,
+        socatPath,
+      })
+    : undefined
   const socatCommands = [
-    `${socat} TCP-LISTEN:3128,fork,reuseaddr UNIX-CONNECT:${httpSocketPath} >/dev/null 2>&1 &`,
-    `${socat} TCP-LISTEN:1080,fork,reuseaddr UNIX-CONNECT:${socksSocketPath} >/dev/null 2>&1 &`,
+    httpListener ??
+      `${socat} TCP-LISTEN:${HTTP_PROXY_PORT},fork,reuseaddr UNIX-CONNECT:${httpSocketPath} >/dev/null 2>&1 &`,
+    `${socat} TCP-LISTEN:${SOCKS_PROXY_PORT},fork,reuseaddr UNIX-CONNECT:${socksSocketPath} >/dev/null 2>&1 &`,
     'trap "kill %1 %2 2>/dev/null; exit" EXIT',
   ]
 
@@ -1809,6 +1846,7 @@ export async function wrapCommandWithSandboxLinux(
     seccompConfig,
     bwrapPath,
     socatPath,
+    loopbackShimScriptPath,
     observeSocketPath,
     abortSignal,
   } = params
@@ -1966,8 +2004,8 @@ export async function wrapCommandWithSandboxLinux(
         // HTTP_PROXY points to the socat listener inside the sandbox (port 3128)
         // which forwards to the Unix socket that bridges to the host's proxy server
         const proxyEnv = generateProxyEnvVars(
-          3128, // Internal HTTP listener port
-          1080, // Internal SOCKS listener port
+          HTTP_PROXY_PORT, // Internal HTTP listener port
+          SOCKS_PROXY_PORT, // Internal SOCKS listener port
           caCertPath,
           proxyAuthToken,
           writeConfig === undefined,
@@ -2091,6 +2129,14 @@ export async function wrapCommandWithSandboxLinux(
         applySeccompPrefix,
         shell,
         socatPath,
+        // Only with a loopback destination on the allowlist: that is the one
+        // case where the child must reach the host's loopback through the
+        // proxy, and so the one case where a sandbox-local server would
+        // otherwise become unreachable (see the NO_PROXY note in
+        // generateProxyEnvVars).
+        routeLoopbackViaProxy && loopbackShimScriptPath
+          ? { scriptPath: loopbackShimScriptPath }
+          : undefined,
       )
       bwrapArgs.push(sandboxCommand)
     } else if (applySeccompPrefix) {
