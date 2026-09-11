@@ -652,6 +652,23 @@ The sandbox runs HTTP and SOCKS5 proxy servers on the host machine that filter a
 
 **JVM tools (macOS/Linux):** the JVM ignores `HTTPS_PROXY`/`NO_PROXY` and has no environment variable for proxy credentials — proxy selection comes from the `https.proxyHost` system properties and the credential can only be supplied through `java.net.Authenticator`. So JVM-based tools (Bazel's gRPC remote cache, Gradle, Maven, …) would otherwise dial the target directly and fail, or reach the proxy without its token and get a 407. To close that gap srt injects a small `-javaagent` via `JAVA_TOOL_OPTIONS` (the env var carries only the jar path, the credential stays in `HTTPS_PROXY`). At JVM start the agent sets `http[s].proxyHost`/`Port` and `http.nonProxyHosts` from the proxy env vars, re-enables Basic auth for CONNECT tunnels, and installs an Authenticator for the proxy endpoint. Explicit `-D` proxy properties on the JVM command line still win, and any inherited `JAVA_TOOL_OPTIONS` is preserved (unless it is a denied credential env var). Every JVM prints a `Picked up JAVA_TOOL_OPTIONS: …` line to stderr as a result; a jlink'd runtime built without the `java.instrument` module cannot load agents and will refuse to start under the sandbox — unset `JAVA_TOOL_OPTIONS` in the command for such a tool. The jar ships in the npm package as `vendor/java-proxy-agent/srt-proxy-agent.jar` (source: `vendor/java-proxy-agent-src/`; built by the release workflow, or locally with `npm run build:java-agent` — needs a JDK ≥ 17). If it is not found, `JAVA_TOOL_OPTIONS` is left alone and JVMs behave as before; bundlers can point at their own copy with `javaAgentJarPath`.
 
+**Browser automation (macOS/Linux):** a browser engine takes its proxy from a launch flag, ignores credentials embedded in that flag's URL, and `@playwright/mcp` (and Puppeteer) expose no username/password option — so a browser pointed at the proxy gets a 407 on every request, and with no proxy it dials the sandbox's own empty loopback. `vendor/srt-proxy-relay/srt-proxy-relay.mjs` closes that gap: it listens on the sandbox's loopback, accepts a credential-less proxied connection (plain HTTP and CONNECT), and forwards it to the proxy with the session credential attached. It grants no capability a sandboxed process lacks — the same token is in `HTTP_PROXY`, and the listener is only reachable inside the network namespace — and filtering is untouched, so the allow/deny lists still decide every request.
+
+```jsonc
+// MCP config: one top-level process owns the listener, so it dies with the
+// client. Do not use `sh -c 'relay & … exec client'` — `exec` replaces the
+// shell, so an EXIT trap never runs and the relay is orphaned holding its
+// port and a credential the next session's proxy will reject.
+"playwright": {
+  "command": "bun",
+  "args": ["<pkg>/vendor/srt-proxy-relay/srt-proxy-relay.mjs", "8899", "--",
+           "playwright-mcp", "--headless", "--no-sandbox",
+           "--proxy-server", "http://127.0.0.1:8899"]
+}
+```
+
+Pass no `--proxy-bypass` covering `localhost`/`127.0.0.1`: that sends the browser to the sandbox's own loopback instead of the proxy. A server the sandbox itself runs is reachable either way (the in-sandbox listener answers loopback locally), so the relay is only needed for host-side services and the internet. Restart the relay when the sandbox is reinitialized — it reads the credential once, at startup.
+
 ### Filesystem Isolation
 
 Filesystem restrictions are enforced at the OS level:
