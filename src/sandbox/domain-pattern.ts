@@ -7,6 +7,7 @@
 
 import { isIP } from 'node:net'
 import { canonicalizeHost, stripBrackets } from './parent-proxy.js'
+import { isLoopbackDestination } from './address.js'
 
 /** Drop an IPv6 zone id from an IP-literal entry; matching ignores zones. */
 function dropZone(host: string): string {
@@ -100,6 +101,8 @@ export function stripDomainPatternPort(pattern: string): string {
  *     deniedDomains).
  *   - `*.example.com` matches any strict subdomain of example.com.
  *   - anything else matches exactly (case-insensitive).
+ *   - Any two loopback destinations match each other (`localhost`,
+ *     `127.0.0.1`, `::1`), since they name the same server — see below.
  *
  * Wildcard suffix matching is refused for IP literals so an IPv6 zone-ID
  * payload like `::ffff:1.2.3.4%x.allowed.com` cannot pass `.endsWith()`
@@ -112,12 +115,23 @@ export function matchesDomainPattern(
 ): boolean {
   const h = hostname.toLowerCase()
   if (pattern === '*') return true
+  const p = pattern.toLowerCase()
+  if (h === p) return true
   if (pattern.startsWith('*.')) {
-    if (isIP(stripBrackets(h))) return false
-    const baseDomain = pattern.substring(2).toLowerCase()
-    return h.endsWith('.' + baseDomain)
+    // Wildcard suffix matching is skipped entirely for IP literals (rather
+    // than tested before), so an IPv6 zone-ID payload cannot ride
+    // `.endsWith()` into a match.
+    if (!isIP(stripBrackets(h)) && h.endsWith('.' + p.substring(2))) {
+      return true
+    }
   }
-  return h === pattern.toLowerCase()
+  // Loopback destinations are one destination however they are spelled:
+  // `localhost`, `127.0.0.1`, `127.0.0.2`, `::1`. A client builds whichever
+  // spelling its URL used, so an entry naming one must admit the others —
+  // otherwise `allowedDomains: ["localhost"]` silently fails to cover the
+  // `http://127.0.0.1:11434` a tool actually dials (or vice versa), and an
+  // allowlist entry that means "the host's loopback" reads as a no-op.
+  return isLoopbackDestination(h) && isLoopbackDestination(p)
 }
 
 /**
@@ -134,6 +148,21 @@ export function matchesDomainPatternWithPort(
   const { hostPattern, port: patternPort } = splitDomainPatternPort(pattern)
   if (patternPort !== undefined && patternPort !== port) return false
   return matchesDomainPattern(hostname, hostPattern)
+}
+
+/**
+ * True when an allowlist names a loopback destination (`localhost`,
+ * `*.localhost`, or a 127/8 / `::1` literal, with or without a `:port`) —
+ * i.e. the policy asks for a service on loopback. Under bwrap
+ * `--unshare-net` that can only mean the *host's* loopback, which is
+ * reachable only through the proxy, so the Linux wrapper uses this to decide
+ * whether loopback belongs in the child's NO_PROXY (see
+ * generateProxyEnvVars).
+ */
+export function allowlistsLoopback(allowedDomains: readonly string[]): boolean {
+  return allowedDomains.some(entry =>
+    isLoopbackDestination(splitDomainPatternPort(entry).hostPattern),
+  )
 }
 
 /**

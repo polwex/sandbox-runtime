@@ -114,6 +114,128 @@ describe('generateProxyEnvVars', () => {
       }
     })
 
+    it('omits the loopback entries when loopback is routed via the proxy', () => {
+      // bwrap --unshare-net gives the child its own loopback, so a NO_PROXY
+      // match on 127.0.0.1 makes the client dial a namespace with nothing in
+      // it. The Linux wrapper sets this when the policy allow-lists loopback.
+      const env = generateProxyEnvVars(
+        3128,
+        1080,
+        undefined,
+        undefined,
+        false,
+        undefined,
+        {
+          routeLoopbackViaProxy: true,
+        },
+      )
+      const entry = env.find(e => e.startsWith('NO_PROXY='))!
+      const tokens = entry.slice('NO_PROXY='.length).split(',')
+      for (const loopback of ['localhost', '127.0.0.1', '::1']) {
+        expect(tokens).not.toContain(loopback)
+      }
+      // Private ranges still bypass the proxy — only loopback moved.
+      expect(tokens).toContain('10.0.0.0/8')
+    })
+
+    it('keeps the loopback entries by default (macOS shares the host stack)', () => {
+      const env = generateProxyEnvVars(3128, 1080)
+      const entry = env.find(e => e.startsWith('NO_PROXY='))!
+      const tokens = entry.slice('NO_PROXY='.length).split(',')
+      expect(tokens).toContain('localhost')
+      expect(tokens).toContain('127.0.0.1')
+      expect(tokens).toContain('::1')
+    })
+
+    it.if(isLinux)(
+      'sandboxed curl reaches a host-loopback server named in allowedDomains',
+      async () => {
+        // The reported failure: a dev server runs on the host's loopback (the
+        // sandboxed process cannot be the listener — #165), the policy
+        // allow-lists it, and the request dies because the child dials its
+        // own empty loopback namespace. Both spellings must work, and the
+        // allowlist entry may name either one.
+        let origin: Server | undefined
+        const hits: string[] = []
+        try {
+          origin = createServer((req, res) => {
+            hits.push(req.url ?? '')
+            res.writeHead(200, { 'content-type': 'text/plain' })
+            res.end('host-loopback-origin')
+          })
+          const originPort = await new Promise<number>((resolve, reject) => {
+            origin!.on('error', reject)
+            origin!.listen(0, '127.0.0.1', () =>
+              resolve((origin!.address() as AddressInfo).port),
+            )
+          })
+
+          await SandboxManager.initialize({
+            network: { allowedDomains: ['localhost'], deniedDomains: [] },
+            filesystem: { denyRead: [], allowWrite: [], denyWrite: [] },
+          })
+
+          for (const host of ['localhost', '127.0.0.1']) {
+            const wrapped = await SandboxManager.wrapWithSandbox(
+              `curl -s --max-time 5 http://${host}:${originPort}/probe-${host}`,
+            )
+            const result = await spawnAsync(wrapped, {
+              shell: true,
+              encoding: 'utf8',
+              timeout: 10000,
+            })
+            expect(result.stdout).toContain('host-loopback-origin')
+            expect(result.status).toBe(0)
+          }
+          expect(hits).toEqual(['/probe-localhost', '/probe-127.0.0.1'])
+        } finally {
+          await SandboxManager.reset()
+          if (origin) await new Promise<void>(r => origin!.close(() => r()))
+        }
+      },
+    )
+
+    it.if(isLinux)(
+      'sandboxed curl to loopback still fails when the policy does not allow it',
+      async () => {
+        // The fix must not turn loopback into an implicit allow: an empty
+        // allowlist leaves loopback blocked like any other destination.
+        let origin: Server | undefined
+        const hits: string[] = []
+        try {
+          origin = createServer((_req, res) => {
+            hits.push('hit')
+            res.writeHead(200)
+            res.end('should-not-be-reached')
+          })
+          const originPort = await new Promise<number>((resolve, reject) => {
+            origin!.on('error', reject)
+            origin!.listen(0, '127.0.0.1', () =>
+              resolve((origin!.address() as AddressInfo).port),
+            )
+          })
+
+          await SandboxManager.initialize({
+            network: { allowedDomains: [], deniedDomains: [] },
+            filesystem: { denyRead: [], allowWrite: [], denyWrite: [] },
+          })
+
+          const wrapped = await SandboxManager.wrapWithSandbox(
+            `curl -s --max-time 5 http://localhost:${originPort}/`,
+          )
+          await spawnAsync(wrapped, {
+            shell: true,
+            encoding: 'utf8',
+            timeout: 10000,
+          })
+          expect(hits).toEqual([])
+        } finally {
+          await SandboxManager.reset()
+          if (origin) await new Promise<void>(r => origin!.close(() => r()))
+        }
+      },
+    )
+
     it.if(isLinux)(
       'sandboxed curl to a .local hostname reaches the parent proxy',
       async () => {

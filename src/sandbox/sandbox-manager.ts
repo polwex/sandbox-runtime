@@ -97,6 +97,7 @@ import {
   resolveParentProxy,
 } from './parent-proxy.js'
 import {
+  allowlistsLoopback,
   matchesDomainPattern,
   matchesDomainPatternWithPort,
   stripDomainPatternPort,
@@ -1716,11 +1717,22 @@ async function wrapWithSandbox(
         binShell,
       })
 
-    case 'linux':
+    case 'linux': {
+      // The child's loopback is its own network namespace (`--unshare-net`),
+      // so a direct connect to 127.0.0.1 can only ever reach what the sandbox
+      // itself bound. When the policy names a loopback destination, that
+      // destination is the host's loopback and only the proxy can reach it —
+      // drop it from the child's NO_PROXY (see generateProxyEnvVars).
+      const routeLoopbackViaProxy = allowlistsLoopback(
+        customConfig?.network?.allowedDomains ??
+          config?.network?.allowedDomains ??
+          [],
+      )
       return wrapCommandWithSandboxLinux({
         command,
         commandId,
         needsNetworkRestriction,
+        routeLoopbackViaProxy,
         // Only pass socket paths if proxy is running (when there are domains to filter)
         httpSocketPath: needsNetworkProxy
           ? getLinuxHttpSocketPath()
@@ -1756,6 +1768,7 @@ async function wrapWithSandbox(
         observeSocketPath: linuxMonitor?.observeSocketPath,
         abortSignal,
       })
+    }
 
     case 'windows':
       // Windows wraps to an argv array, not a shell string. Forcing

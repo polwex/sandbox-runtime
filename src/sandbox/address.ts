@@ -166,3 +166,17 @@ export function isLoopbackName(hostname: string): boolean {
   const h = hostname.toLowerCase().replace(/\.$/, '')
   return h === 'localhost' || h.endsWith('.localhost')
 }
+
+/**
+ * True for a destination that lives on loopback however it is spelled: an
+ * IPv4/IPv6 loopback literal (`127.0.0.1`, `127.0.0.2`, `::1`) or a
+ * `localhost` / `*.localhost` name.
+ *
+ * Policy matching treats every one of these as the same destination, because
+ * which spelling a client picks is its own business: `http://localhost:3000`
+ * and `http://127.0.0.1:3000` are the same server, so an allowlist entry
+ * naming one must cover the other (see {@link matchesDomainPatternWithPort}).
+ */
+export function isLoopbackDestination(host: string): boolean {
+  return isLoopbackAddress(host) || isLoopbackName(host)
+}

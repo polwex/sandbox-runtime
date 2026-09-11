@@ -478,6 +478,16 @@ export function generateProxyEnvVars(
   proxyAuthToken?: string,
   skipTmpdir?: boolean,
   encodedCommand?: string,
+  opts: {
+    /**
+     * Omit loopback from NO_PROXY so clients hand loopback destinations to
+     * the proxy instead of dialing them directly. Set on Linux when the
+     * policy allow-lists a loopback destination: `bwrap --unshare-net` gives
+     * the child its own loopback, so a direct connect can never leave the
+     * sandbox and the proxy is the only channel to the host's services.
+     */
+    routeLoopbackViaProxy?: boolean
+  } = {},
 ): string[] {
   // When the proxy requires auth, embed the credential in the URL so clients
   // send Proxy-Authorization automatically. Only the sandbox child sees this
@@ -521,16 +531,24 @@ export function generateProxyEnvVars(
     return envVars
   }
 
-  // Always set NO_PROXY to exclude localhost and private networks from
-  // proxying. *.local is intentionally absent: under network restriction the
+  // Always set NO_PROXY to keep local and private-network traffic off the
+  // proxy. *.local is intentionally absent: under network restriction the
   // child has no usable resolver/routes (bwrap --unshare-net on Linux,
   // loopback-only under seatbelt), so a NO_PROXY match makes the client try
   // direct getaddrinfo() and fail. Routing .local hostnames through the proxy
   // lets the parent resolve them (e.g. Kubernetes *.svc.cluster.local).
+  //
+  // Loopback is that same story whenever the child does not share the host's
+  // loopback: under bwrap --unshare-net the child's 127.0.0.1 is its own
+  // namespace, so a NO_PROXY match sends the request somewhere with nothing
+  // on it. Only the proxy can reach the host's services at 127.0.0.1:<port>
+  // (a dev server, Ollama, a local API), so when the policy allow-lists a
+  // loopback destination the entries are omitted and clients proxy loopback
+  // instead of dialing it (routeLoopbackViaProxy, set by the Linux wrapper).
+  // macOS keeps them: Seatbelt shares the host network stack, so its direct
+  // loopback *is* the host's loopback.
   const noProxyAddresses = [
-    'localhost',
-    '127.0.0.1',
-    '::1',
+    ...(opts.routeLoopbackViaProxy ? [] : ['localhost', '127.0.0.1', '::1']),
     '169.254.0.0/16', // Link-local
     '10.0.0.0/8', // Private network
     '172.16.0.0/12', // Private network

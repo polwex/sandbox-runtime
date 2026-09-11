@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test'
 import {
+  allowlistsLoopback,
   isInjectHostCoveredByAllowedDomains,
   matchesDomainPattern,
   matchesDomainPatternWithPort,
@@ -230,5 +231,84 @@ describe('matchesDomainPatternWithPort', () => {
     expect(matchesDomainPatternWithPort('anything.test', 23, '*:22')).toBe(
       false,
     )
+  })
+})
+
+describe('matchesDomainPatternWithPort — loopback destinations', () => {
+  // Under bwrap --unshare-net the sandboxed process's own loopback is a
+  // private network namespace, so a policy entry naming a loopback
+  // destination can only ever mean the *host's* loopback, reachable only
+  // through the proxy. Which spelling the client builds (`localhost`,
+  // `127.0.0.1`, `::1`, `127.0.0.2`) is its own business, so an entry has to
+  // cover them all — otherwise `allowedDomains: ["localhost"]` silently fails
+  // to admit the `http://127.0.0.1:11434` URL a tool actually dials.
+  test('a loopback name entry admits the loopback literals', () => {
+    expect(matchesDomainPatternWithPort('127.0.0.1', 11434, 'localhost')).toBe(
+      true,
+    )
+    expect(matchesDomainPatternWithPort('127.0.0.2', 80, 'localhost')).toBe(
+      true,
+    )
+    expect(matchesDomainPatternWithPort('::1', 11434, 'localhost')).toBe(true)
+    expect(matchesDomainPatternWithPort('localhost', 3000, '*.localhost')).toBe(
+      true,
+    )
+  })
+
+  test('a loopback literal entry admits every other loopback spelling', () => {
+    expect(matchesDomainPatternWithPort('localhost', 3000, '127.0.0.1')).toBe(
+      true,
+    )
+    expect(matchesDomainPatternWithPort('::1', 3000, '127.0.0.1')).toBe(true)
+    expect(matchesDomainPatternWithPort('127.0.0.1', 443, '[::1]:443')).toBe(
+      true,
+    )
+  })
+
+  test('the entry port still governs', () => {
+    expect(
+      matchesDomainPatternWithPort('localhost', 3000, '127.0.0.1:3000'),
+    ).toBe(true)
+    expect(
+      matchesDomainPatternWithPort('localhost', 4000, '127.0.0.1:3000'),
+    ).toBe(false)
+  })
+
+  test('a loopback entry admits nothing off loopback', () => {
+    expect(matchesDomainPatternWithPort('example.com', 80, 'localhost')).toBe(
+      false,
+    )
+    expect(
+      matchesDomainPatternWithPort('127.0.0.1.evil.com', 80, 'localhost'),
+    ).toBe(false)
+    expect(matchesDomainPatternWithPort('notlocalhost', 80, 'localhost')).toBe(
+      false,
+    )
+  })
+})
+
+describe('allowlistsLoopback', () => {
+  // The Linux wrapper uses this to decide whether loopback belongs in the
+  // child's NO_PROXY: a policy that names loopback wants the host's loopback,
+  // which only the proxy can serve.
+  test('true for any loopback-spelled entry, with or without a port', () => {
+    for (const entries of [
+      ['localhost'],
+      ['*.localhost'],
+      ['127.0.0.1'],
+      ['127.0.0.2'],
+      ['[::1]'],
+      ['example.com', 'localhost:11434'],
+      ['api.example.com:443', '127.0.0.1:3000'],
+    ]) {
+      expect(allowlistsLoopback(entries)).toBe(true)
+    }
+  })
+
+  test('false when no entry names loopback', () => {
+    expect(allowlistsLoopback([])).toBe(false)
+    expect(
+      allowlistsLoopback(['example.com', '*.example.com', '10.0.0.1']),
+    ).toBe(false)
   })
 })

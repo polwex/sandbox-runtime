@@ -49,6 +49,14 @@ export interface LinuxSandboxParams {
   socksProxyPort?: number
   /** Per-session proxy auth token; embedded in proxy env URLs. */
   proxyAuthToken?: string
+  /**
+   * Drop loopback from the child's NO_PROXY so `localhost` / `127.0.0.1` /
+   * `::1` requests go to the proxy. Set when the policy allow-lists a
+   * loopback destination: the child's loopback is its own network namespace
+   * (`--unshare-net`), so direct loopback can never reach the host's
+   * services — the proxy is the only path to them.
+   */
+  routeLoopbackViaProxy?: boolean
   /** Path to the TLS-termination CA cert; injected as trust env vars. */
   caCertPath?: string
   /** Path to the JVM proxy agent jar; injected via JAVA_TOOL_OPTIONS. */
@@ -1782,6 +1790,7 @@ export async function wrapCommandWithSandboxLinux(
     httpProxyPort,
     socksProxyPort,
     proxyAuthToken,
+    routeLoopbackViaProxy = false,
     caCertPath,
     javaAgentJarPath,
     readConfig,
@@ -1963,6 +1972,7 @@ export async function wrapCommandWithSandboxLinux(
           proxyAuthToken,
           writeConfig === undefined,
           encodeSandboxedCommand(commandId ?? command),
+          { routeLoopbackViaProxy },
         )
         bwrapArgs.push(
           ...proxyEnv.flatMap((env: string) => {
