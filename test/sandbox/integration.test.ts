@@ -15,6 +15,7 @@ import { spawnAsync } from '../helpers/spawn.js'
 import { SandboxManager } from '../../src/sandbox/sandbox-manager.js'
 import type { SandboxRuntimeConfig } from '../../src/sandbox/sandbox-config.js'
 import { getApplySeccompBinaryPath } from '../../src/sandbox/generate-seccomp-filter.js'
+import { whichSync } from '../../src/utils/which.js'
 
 /**
  * Create a minimal test configuration for the sandbox with example.com allowed
@@ -825,8 +826,14 @@ describe.if(isLinux)('Sandbox Integration Tests', () => {
         // but bwrap ensures it doesn't grant actual privilege escalation
         const setuidTest = join(TEST_DIR, 'setuid-test')
 
+        // A shell to copy, resolved rather than assumed to be at /bin: systems
+        // without an FHS /bin (NixOS) have no /bin/bash, so `cp` would fail
+        // and the assertion below would read an error message instead of a uid.
+        const bashPath = whichSync('bash')
+        expect(bashPath).toBeTruthy()
+
         const command1 = await SandboxManager.wrapWithSandbox(
-          `cp /bin/bash ${setuidTest} 2>&1 && chmod u+s ${setuidTest} 2>&1 && ${setuidTest} -c "id -u" 2>&1`,
+          `cp ${bashPath} ${setuidTest} 2>&1 && chmod u+s ${setuidTest} 2>&1 && ${setuidTest} -c "id -u" 2>&1`,
         )
 
         const result1 = await spawnAsync(command1, {

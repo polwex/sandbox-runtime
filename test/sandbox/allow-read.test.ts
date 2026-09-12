@@ -260,6 +260,9 @@ describe('allowRead carve-out with denyRead at filesystem root (issue #10)', () 
   const TEST_CONTENT = 'ROOT_CARVE_OUT'
   // Paths needed for sh/cat to load at all when the whole filesystem is denied.
   // /private covers /tmp and /var (macOS symlinks). /lib* for Linux ld.so.
+  // /nix/store holds them on NixOS, where there is no FHS /bin or /lib at all:
+  // the shell, cat and the libraries they load (via RPATH) all live there, so
+  // without it the carve-out test cannot exec its own command.
   const EXEC_DEPS = [
     '/bin',
     '/usr',
@@ -269,6 +272,7 @@ describe('allowRead carve-out with denyRead at filesystem root (issue #10)', () 
     '/private',
     '/dev',
     '/etc',
+    '/nix/store',
   ]
 
   beforeAll(() => {

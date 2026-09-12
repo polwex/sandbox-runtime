@@ -90,7 +90,13 @@ describe('--control-fd', () => {
 
   function writeScript(body: string): string {
     const testScript = path.join(tmpDir, 'test.sh')
-    fs.writeFileSync(testScript, `#!/bin/bash\n${body}\n`, { mode: 0o755 })
+    // `#!/usr/bin/env bash`, not `#!/bin/bash`: the interpreter has to resolve
+    // wherever bash actually lives. A fixed /bin/bash does not exist on
+    // systems without an FHS /bin (NixOS), and the script then fails to exec
+    // with ENOENT rather than testing the control fd at all.
+    fs.writeFileSync(testScript, `#!/usr/bin/env bash\n${body}\n`, {
+      mode: 0o755,
+    })
     return testScript
   }
 

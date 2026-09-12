@@ -11,6 +11,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { getApplySeccompBinaryPath } from '../../src/sandbox/generate-seccomp-filter.js'
+import { whichSync } from '../../src/utils/which.js'
 import { isLinux } from '../helpers/platform.js'
 
 /**
@@ -47,12 +48,23 @@ function makeCopy(mode: number): string {
   return copy
 }
 
+/**
+ * Absolute path to a utility, resolved from PATH. The tests below exec a
+ * command through apply-seccomp, and a fixed `/bin/echo` does not exist on
+ * systems without an FHS `/bin` (NixOS), where the exec fails with ENOENT and
+ * tests something other than the helper. Falls back to the name itself, which
+ * apply-seccomp resolves via PATH (`execvp`).
+ */
+function tool(name: string): string {
+  return whichSync(name) ?? name
+}
+
 function runCopy(mode: number): {
   status: number | null
   stdout: string
   stderr: string
 } {
-  const r = spawnSync(makeCopy(mode), ['/bin/echo', 'ok'], {
+  const r = spawnSync(makeCopy(mode), [tool('echo'), 'ok'], {
     stdio: 'pipe',
     timeout: 10000,
   })
@@ -66,7 +78,7 @@ function runCopy(mode: number): {
 /* Spawn a copy running `sleep`, wait for setup to finish, and return the
  * uid owning the outer helper's /proc entries — root iff dumpable is 0. */
 async function procOwnerDuringRun(mode: number): Promise<number> {
-  const child = spawn(makeCopy(mode), ['/bin/sleep', '3'], { stdio: 'ignore' })
+  const child = spawn(makeCopy(mode), [tool('sleep'), '3'], { stdio: 'ignore' })
   try {
     // Namespace setup is a handful of syscalls; 500ms is ample margin.
     await new Promise(resolve => setTimeout(resolve, 500))
