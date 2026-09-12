@@ -531,15 +531,24 @@ function registerExitCleanupHandler(): void {
   // A parent terminated by a signal never reaches 'exit': Node runs no
   // 'exit' handler for a default-terminated SIGTERM/SIGINT, and a harness
   // that tears a session down with SIGTERM would leave every mount point
-  // behind (or, after its SIGKILL escalation, permanently). Clean up on the
-  // signal itself, then re-raise it with our own listener removed, so the
-  // default disposition — and any other listener, such as the CLI forwarding
-  // the signal to the sandboxed child — still decides how the process ends.
+  // behind (or, after its SIGKILL escalation, permanently). So clean up on the
+  // signal itself.
+  //
+  // Then restore whatever disposition would have applied without us: re-raise
+  // only when we were that signal's last listener. Re-raising unconditionally
+  // would deliver the signal a second time to any other listener (srt is also
+  // a library, so an embedder's own shutdown handler runs there too) and would
+  // keep the process alive, because a remaining listener suppresses the
+  // default. With this condition a sole-listener process dies as it would have
+  // (exit 143 for SIGTERM) right after cleanup, while an embedder that owns a
+  // handler sees it exactly once and decides its own exit.
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
     const onSignal = (): void => {
       cleanupBwrapMountPoints({ force: true })
       process.removeListener(signal, onSignal)
-      process.kill(process.pid, signal)
+      if (process.listenerCount(signal) === 0) {
+        process.kill(process.pid, signal)
+      }
     }
     process.on(signal, onSignal)
   }
