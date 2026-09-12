@@ -508,17 +508,20 @@ async function forwardUpstream(
   // piped body bytes raw after complete-framed headers — a
   // request-smuggling primitive. The SigV4 buffered path is exempt:
   // end(bufferedBody) computes its own content-length.
+  //
+  // Asked for via the request's flag rather than a `transfer-encoding`
+  // header: the header plus a measurable body makes Bun emit `Content-Length`
+  // too, and a request with both framing headers is rejected 400 by any
+  // conforming server. The flag frames exactly once on both runtimes (Node
+  // chunked, Bun Content-Length), so the smuggling protection is unchanged.
   const clientDeclaredBody = Boolean(
     req.headers['content-length'] || req.headers['transfer-encoding'],
   )
-  if (
+  const needsExplicitFraming =
     clientDeclaredBody &&
     bufferedBody === undefined &&
     fwdHeaders['content-length'] === undefined &&
     fwdHeaders['transfer-encoding'] === undefined
-  ) {
-    fwdHeaders['transfer-encoding'] = 'chunked'
-  }
 
   const failUpstream = (err: Error) => {
     logForDebugging(
@@ -578,6 +581,12 @@ async function forwardUpstream(
       upRes.pipe(res)
     },
   )
+
+  // See needsExplicitFraming: framing is requested on the request object, not
+  // through a header, so the runtime emits exactly one framing header.
+  if (needsExplicitFraming) {
+    upstream.useChunkedEncodingByDefault = true
+  }
 
   upstream.on('error', failUpstream)
 

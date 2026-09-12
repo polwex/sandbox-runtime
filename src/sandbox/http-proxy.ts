@@ -789,16 +789,22 @@ export function createHttpProxyServer(options: HttpProxyServerOptions): Server {
       // explicitly: for bodyless-method requests the runtime would
       // otherwise write the piped body bytes raw after complete-framed
       // headers — a request-smuggling primitive.
+      //
+      // Framing is requested through the request's own flag rather than by
+      // setting a `transfer-encoding` header, because a header plus a body the
+      // client runtime can measure makes Bun emit `Content-Length` as well —
+      // and a request carrying both framing headers is rejected with 400 by any
+      // conforming server (request-smuggling hardening), which would fail every
+      // chunked client request on that runtime. The flag yields exactly one
+      // framing header on both: Node re-frames chunked (as before, so the
+      // smuggling protection is unchanged), Bun uses Content-Length.
       const clientDeclaredBody = Boolean(
         req.headers['content-length'] || req.headers['transfer-encoding'],
       )
-      if (
+      const needsExplicitFraming =
         clientDeclaredBody &&
         fwdHeaders['content-length'] === undefined &&
         fwdHeaders['transfer-encoding'] === undefined
-      ) {
-        fwdHeaders['transfer-encoding'] = 'chunked'
-      }
 
       const failUpstream = (err: Error) => {
         logForDebugging(`Proxy request failed: ${err.message}`, {
@@ -908,6 +914,14 @@ export function createHttpProxyServer(options: HttpProxyServerOptions): Server {
             proxyRes.pipe(res)
           },
         )
+      }
+
+      // Request framing for the body the client declared but whose headers we
+      // stripped (see needsExplicitFraming). Set on the request object because
+      // it is the only way to ask for chunked framing without also provoking
+      // the runtime to add Content-Length.
+      if (needsExplicitFraming) {
+        proxyReq.useChunkedEncodingByDefault = true
       }
 
       proxyReq.on('error', failUpstream)
