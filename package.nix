@@ -14,7 +14,7 @@
 }:
 buildNpmPackage (finalAttrs: {
   pname = "sandbox-runtime";
-  version = "0.1.0p";
+  version = "0.1.1p";
 
   __structuredAttrs = true;
 
@@ -43,6 +43,8 @@ buildNpmPackage (finalAttrs: {
       ];
   in ''
     wrapProgram $out/bin/srt \
+      --prefix PATH : ${lib.makeBinPath runtimeDeps}
+    wrapProgram $out/bin/srt-proxy-relay \
       --prefix PATH : ${lib.makeBinPath runtimeDeps}
   '';
 
