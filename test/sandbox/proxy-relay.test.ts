@@ -101,6 +101,8 @@ interface Relay {
   port: Promise<number>
   /** Pid of the supervised client, as reported once it has been started. */
   supervisedPid: Promise<number>
+  /** Everything the supervised client wrote to stdout. */
+  stdoutText: () => string
 }
 
 function startRelay(proxyPort: number, command: string[] = []): Relay {
@@ -122,7 +124,15 @@ function startRelay(proxyPort: number, command: string[] = []): Relay {
   // reported as an unhandled error rather than the test's own assertion.
   const settled = { port: false, supervisedPid: false }
   let out = ''
+  let stdout = ''
+  // Standalone, the relay reports on stdout — that is how a caller learns the
+  // port a `0` argument bound. Supervising a client, it reports on stderr:
+  // stdout belongs to that client (an MCP client's JSON-RPC stream).
+  const report = command.length === 0 ? child.stdout! : child.stderr!
   child.stdout!.on('data', d => {
+    stdout += d
+  })
+  report.on('data', d => {
     out += d
     const bound = out.match(/listening on 127\.0\.0\.1:(\d+)/)
     if (bound && !settled.port) {
@@ -147,7 +157,12 @@ function startRelay(proxyPort: number, command: string[] = []): Relay {
       supervisedPid.reject(error)
     }
   })
-  return { child, port: port.promise, supervisedPid: supervisedPid.promise }
+  return {
+    child,
+    port: port.promise,
+    supervisedPid: supervisedPid.promise,
+    stdoutText: () => stdout,
+  }
 }
 
 /** Whether a pid currently exists (signal 0 is a permission/existence probe). */
@@ -286,12 +301,16 @@ describe('srt-proxy-relay', () => {
     // The child is `sleep`, which dies on SIGTERM by default. Asserting the
     // relay exited is NOT enough: with no forwarding at all its own SIGTERM
     // handler is absent and it dies anyway, orphaning the client. So the
-    // assertion is on the client's pid, which the relay reports on stdout.
+    // assertion is on the client's pid, which the relay reports on stderr.
     stub = await startStubProxy()
     relay = startRelay(stub.port, ['sleep', '60'])
     await relay.port
     const childPid = await relay.supervisedPid
     expect(alive(childPid)).toBe(true)
+    // Nothing of the relay's own may land on stdout: a supervising relay hands
+    // that stream to its client, and an MCP client speaks JSON-RPC on it, so
+    // one stray line would corrupt the session.
+    expect(relay.stdoutText()).toBe('')
     const exited = once(relay.child, 'exit')
 
     relay.child.kill('SIGTERM')

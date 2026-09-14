@@ -41,6 +41,10 @@
  * replaces the shell, so an `EXIT` trap never runs and the relay is orphaned
  * holding its port and a soon-to-be-stale credential.
  *
+ * Reports (the bound port, and the supervised pid) go to stdout when the relay
+ * runs alone — that is how a caller learns the port a `0` argument bound — and
+ * to stderr when it supervises a child, whose stdout belongs to the client.
+ *
  * Runs under node or bun (node builtins only).
  */
 import http from 'node:http'
@@ -129,9 +133,11 @@ server.listen(port, '127.0.0.1', () => {
   // Report the PORT ACTUALLY BOUND: with `0` the kernel picks, and a caller
   // (or a test) needs the real one.
   const bound = server.address().port
-  console.log(
-    `srt-proxy-relay listening on 127.0.0.1:${bound} -> ${upstream.host}`,
-  )
+  // A supervised child owns stdout: an MCP client speaks JSON-RPC there, and a
+  // single stray line corrupts the stream. So the reports move to stderr as
+  // soon as this relay is wrapping a client.
+  const report = command.length === 0 ? console.log : console.error
+  report(`srt-proxy-relay listening on 127.0.0.1:${bound} -> ${upstream.host}`)
   if (command.length === 0) return
 
   // Supervised child: the relay is the top-level process, so its exit (for any
@@ -140,7 +146,7 @@ server.listen(port, '127.0.0.1', () => {
   const child = spawn(command[0], command.slice(1), { stdio: 'inherit' })
   // Reported so a caller can see (and reap) the supervised process: without
   // it, a relay that dies abnormally leaves a client nobody can name.
-  console.log(`srt-proxy-relay supervising pid=${child.pid}`)
+  report(`srt-proxy-relay supervising pid=${child.pid}`)
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
     process.on(signal, () => child.kill(signal))
   }
