@@ -923,6 +923,17 @@ export const FilesystemConfigSchema = z.object({
     .describe(
       'Allow writes to .git/config files (default: false). Enables git remote URL updates while keeping .git/hooks protected.',
     ),
+  createMissingDenyPaths: z
+    .boolean()
+    .optional()
+    .describe(
+      'Create an empty placeholder for a denied path that does not exist yet (default: true). ' +
+        'Blocking the *creation* of a path requires something to mount over, so bwrap needs an ' +
+        'empty file (or directory) at that path — a real, 0-byte artifact in the working tree, ' +
+        'visible to the host until the sandbox exits. Set false to deny only paths that already ' +
+        'exist: nothing is written to the working tree, and a denied file the sandbox creates ' +
+        'itself is no longer blocked (Linux only — macOS denies by glob and creates nothing).',
+    ),
 })
 
 /**

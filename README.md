@@ -375,6 +375,7 @@ Uses two different patterns:
 
 - `filesystem.allowWrite` - Array of paths to allow write access. Empty array = no write access.
 - `filesystem.denyWrite` - Array of paths to deny write access within allowed paths (takes precedence over allowWrite)
+- `filesystem.createMissingDenyPaths` - Materialise a denied path that does not exist yet, so its *creation* can be blocked (boolean, default: `true`, Linux only). Blocking a path with `bwrap` means mounting something over it, and a mount needs a target: a denied path that does not exist gets an empty file (or directory) created at that path, which is a real 0-byte artifact in your working tree — visible to the host, `git status` included — until the sandbox exits. Set this to `false` to deny only paths that already exist: nothing is written into the working tree, and a denied file that does not yet exist can be created by the sandboxed process (choosing what a hostile write can achieve, rather than where a stray file appears). Existing denied paths stay denied either way.
 
 **Path Syntax (macOS):**
 
@@ -722,6 +723,7 @@ $ srt 'echo "bad" > .git/hooks/pre-commit'
 
 - Those mount points are real, empty files in your working tree (and empty directories for the `.claude/commands` form) for as long as the sandboxed command runs, so `git status` and file listings show them — `.bashrc`, `.gitconfig`, `.mcp.json`, `.vscode/`, `.idea/`, `.claude/` … — until the command finishes. The runner creates them itself, so they never linger past a clean run.
 - They cannot be removed early: the deny rule lives on the mount, so deleting one would re-open the path. `SIGTERM`, `SIGINT` and `SIGHUP` clean up immediately, and a normal exit cleans up at exit; only a `SIGKILL`ed runner can leave them behind. A leftover is an empty file owned by the invoking user (or, from an older run, by `nobody`, which a sticky `/tmp` will not let you delete); remove it by hand if you find one, since it blocks the deny rule from being re-established in that directory.
+- To have none of them created at all, set `filesystem.createMissingDenyPaths: false`: only paths that already exist are denied, so nothing is written into the working tree — at the cost of no longer blocking the *creation* of those paths (see the option's note above).
 
 macOS uses glob patterns and needs none of this: it blocks both existing and new files with no artifacts.
 

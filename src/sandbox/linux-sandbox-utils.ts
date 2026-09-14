@@ -87,6 +87,14 @@ export interface LinuxSandboxParams {
   /** Allow writes to .git/config files (default: false) */
   allowGitConfig?: boolean
   /**
+   * Materialise a denied path that does not exist yet — an empty file (or
+   * directory) at that path — so bwrap has something to mount over and its
+   * creation is blocked. Off means only paths that already exist are denied,
+   * which keeps the working tree free of those placeholders. See
+   * FilesystemConfigSchema.createMissingDenyPaths.
+   */
+  createMissingDenyPaths?: boolean
+  /**
    * Directories to emit as `safe.directory` via `GIT_CONFIG_*` env
    * vars (see {@link buildPosixGitSafeDirEnv}). Under `--unshare-user`
    * the repo owner's uid is unmapped inside the sandbox, so git
@@ -1063,6 +1071,7 @@ async function generateFilesystemArgs(
   ripgrepConfig: { command: string; args?: string[] } = { command: 'rg' },
   mandatoryDenySearchDepth: number = DEFAULT_MANDATORY_DENY_SEARCH_DEPTH,
   allowGitConfig = false,
+  createMissingDenyPaths = true,
   abortSignal?: AbortSignal,
 ): Promise<string[]> {
   const args: string[] = []
@@ -1560,7 +1569,11 @@ async function generateFilesystemArgs(
         const ancestorIsWithinReadOnlyDeny =
           coveredBySafeReadOnlyDenyDir(normalizedPath)
 
-        if (ancestorIsWithinAllowedPath && !ancestorIsWithinReadOnlyDeny) {
+        if (
+          createMissingDenyPaths &&
+          ancestorIsWithinAllowedPath &&
+          !ancestorIsWithinReadOnlyDeny
+        ) {
           const firstNonExistent = findFirstNonExistentComponent(normalizedPath)
 
           // Fix 2: If firstNonExistent is an intermediate component (not the
@@ -1591,6 +1604,10 @@ async function generateFilesystemArgs(
         } else if (ancestorIsWithinReadOnlyDeny) {
           logForDebugging(
             `[Sandbox Linux] Skipping non-existent deny path inside a read-only denied directory (already uncreatable): ${normalizedPath}`,
+          )
+        } else if (!createMissingDenyPaths) {
+          logForDebugging(
+            `[Sandbox Linux] Not creating a placeholder for the non-existent deny path ${normalizedPath} (filesystem.createMissingDenyPaths is false)`,
           )
         } else {
           logForDebugging(
@@ -1908,6 +1925,7 @@ export async function wrapCommandWithSandboxLinux(
     ripgrepConfig = { command: 'rg' },
     mandatoryDenySearchDepth = DEFAULT_MANDATORY_DENY_SEARCH_DEPTH,
     allowGitConfig = false,
+    createMissingDenyPaths = true,
     gitSafeDirectories,
     seccompConfig,
     bwrapPath,
@@ -2129,6 +2147,7 @@ export async function wrapCommandWithSandboxLinux(
       ripgrepConfig,
       mandatoryDenySearchDepth,
       allowGitConfig,
+      createMissingDenyPaths,
       abortSignal,
     )
     bwrapArgs.push(...fsArgs)

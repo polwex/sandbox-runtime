@@ -1784,6 +1784,10 @@ async function wrapWithSandbox(
         ripgrepConfig: getRipgrepConfig(),
         mandatoryDenySearchDepth: getMandatoryDenySearchDepth(),
         allowGitConfig: getAllowGitConfig(),
+        // Linux-only: it is the only platform that materialises a placeholder
+        // for a denied path that does not exist (see FilesystemConfigSchema).
+        createMissingDenyPaths:
+          config?.filesystem?.createMissingDenyPaths ?? true,
         gitSafeDirectories,
         seccompConfig: getSeccompConfig(),
         bwrapPath: config?.bwrapPath,
