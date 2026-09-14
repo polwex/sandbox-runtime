@@ -24,9 +24,9 @@
  * forwarded request.
  *
  * USAGE
- *   srt-proxy-relay.mjs [port]                # relay only, default 8899
- *   srt-proxy-relay.mjs [port] -- <cmd> [a…]  # relay, then run <cmd> as a
- *                                             # supervised child
+ *   srt-proxy-relay [port]                # relay only, default 8899
+ *   srt-proxy-relay [port] -- <cmd> [a…]  # relay, then run <cmd> as a
+ *                                         # supervised child
  *
  * Point the client at it (`--proxy-server http://127.0.0.1:8899` for
  * playwright-mcp) and do NOT add a bypass list covering `localhost` /

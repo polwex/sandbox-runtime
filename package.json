@@ -6,7 +6,8 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "srt": "dist/cli.js"
+    "srt": "dist/cli.js",
+    "srt-proxy-relay": "vendor/srt-proxy-relay/srt-proxy-relay.mjs"
   },
   "engines": {
     "node": ">=20.11.0"
