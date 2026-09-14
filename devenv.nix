@@ -7,6 +7,12 @@
 }: {
   # https://devenv.sh/basics/
   env.GREET = "devenv";
+  # `bun run build:seccomp` links `gcc -static -lseccomp`, which needs a static
+  # archive; nixpkgs' `libseccomp` ships only libseccomp.so. `packages` puts
+  # nothing on the linker search path, and the plain package's default output
+  # has no archive either — the .a is in the `lib` output that makeLibraryPath
+  # resolves to.
+  env.LIBRARY_PATH = lib.makeLibraryPath [pkgs.pkgsStatic.libseccomp];
 
   # https://devenv.sh/packages/
   packages = with pkgs; [
@@ -15,11 +21,6 @@
     binutils
     libseccomp
     glibc.static # build:seccomp
-    # The BPF generator is linked with `gcc -static -lseccomp`, which needs a
-    # *static* archive. nixpkgs' `libseccomp` ships only libseccomp.so, so the
-    # link fails with "cannot find -lseccomp"; pkgsStatic.libseccomp provides
-    # libseccomp.a and a build input puts it on the compiler search path.
-    pkgsStatic.libseccomp
     python3 # pid-namespace tests
     bubblewrap
     socat
@@ -33,10 +34,13 @@
   ];
 
   # https://devenv.sh/languages/
-  languages.javascript = {
-    enable = true;
-    npm.enable = true;
-    bun.enable = true;
+  languages = {
+    javascript = {
+      enable = true;
+      npm.enable = true;
+      bun.enable = true;
+    };
+    python.enable = true;
   };
 
   # https://devenv.sh/processes/
@@ -72,4 +76,9 @@
   # git-hooks.hooks.shellcheck.enable = true;
 
   # See full reference at https://devenv.sh/reference/options/
+  #
+
+  outputs = {
+    default = pkgs.callPackage ./package.nix {};
+  };
 }
